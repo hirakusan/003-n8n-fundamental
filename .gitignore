@@ -1,3 +1,32 @@
 # Environment files
 .env
+.env.local
+.env.*.local
 
+# Data directories
+data/*/
+!data/.gitkeep
+
+# Logs
+logs/
+*.log
+
+# SSL certificates
+certs/
+*.pem
+*.key
+
+# Backup files
+backups/
+*.sql
+*.tar.gz
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
