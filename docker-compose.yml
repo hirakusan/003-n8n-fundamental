@@ -1,0 +1,295 @@
+version: "3.9"
+
+services:
+  # N8N - Workflow Automation Platform
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=${POSTGRESQL_DATABASE}
+      - DB_POSTGRESDB_USER=${POSTGRESQL_USER}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRESQL_PASSWORD}
+      - GENERIC_TIMEZONE=${TZ}
+      - WEBHOOK_URL=${WEBHOOK_URL}
+      - N8N_HOST=${N8N_HOST}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+      - N8N_RUNNERS_ENABLED=true
+      - OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS=true
+      - N8N_LOG_LEVEL=info
+      - N8N_LOG_OUTPUT=file
+      - N8N_LOG_FILE_LOCATION=/logs/n8n.log
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./data/n8n_data:/home/node/.n8n
+      - ./logs/n8n:/logs
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "${N8N_HOST}/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Ollama - Local LLM Server
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    restart: unless-stopped
+    ports:
+      - "11434:11434"
+    environment:
+      - OLLAMA_HOST=0.0.0.0:11434
+      - OLLAMA_MODELS=/root/.ollama/models
+      - OLLAMA_KEEP_ALIVE=24h
+      - OLLAMA_MAX_LOADED_MODELS=3
+    volumes:
+      - /mnt/c/Users/HP/.ollama:/root/.ollama
+      - ./logs/ollama:/var/log/ollama
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "${OLLAMA_HOST}/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+
+  # PostgreSQL - Database
+  postgres:
+    image: postgres:16
+    container_name: postgres_n8n
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRESQL_DATABASE}
+      POSTGRES_USER: ${POSTGRESQL_USER}
+      POSTGRES_PASSWORD: ${POSTGRESQL_PASSWORD}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./data/postgres_data:/var/lib/postgresql/data
+      - ./logs/postgres:/var/log/postgresql
+      - ./config/postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRESQL_USER} -d ${POSTGRESQL_DATABASE}"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    command: >
+      postgres
+      -c shared_preload_libraries=pg_stat_statements
+      -c pg_stat_statements.track=all
+      -c max_connections=200
+      -c shared_buffers=256MB
+      -c effective_cache_size=1GB
+      -c maintenance_work_mem=64MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+      -c default_statistics_target=100
+
+  # Redis - Cache & Session Store
+  redis:
+    image: redis:7
+    container_name: redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    volumes:
+      - ./data/redis_data:/data
+      - ./logs/redis:/var/log/redis
+      - ./config/redis/redis.conf:/etc/redis/redis.conf:ro
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    command: redis-server /etc/redis/redis.conf --appendonly yes --requirepass ${REDIS_PASSWORD}
+
+  # Grafana - Monitoring & Dashboards
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GF_SECURITY_ADMIN_USER}
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD}
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,grafana-simple-json-datasource,grafana-worldmap-panel
+      - GF_PATHS_PROVISIONING=/etc/grafana/provisioning
+      - GF_PATHS_DATA=/var/lib/grafana
+      - GF_PATHS_LOGS=/var/log/grafana
+      - GF_LOG_LEVEL=info
+      - GF_SERVER_ROOT_URL=${GF_SERVER_ROOT_URL}
+      - GF_ANALYTICS_REPORTING_ENABLED=false
+      - GF_ANALYTICS_CHECK_FOR_UPDATES=false
+    volumes:
+      - ./data/grafana_data:/var/lib/grafana
+      - ./logs/grafana:/var/log/grafana
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./config/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    networks:
+      - app-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "${GF_SERVER_ROOT_URL}/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Uptime Kuma - Uptime Monitoring
+  kuma:
+    image: louislam/uptime-kuma:1
+    container_name: uptime-kuma
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - UPTIME_KUMA_PORT=3001
+      - UPTIME_KUMA_HOST=0.0.0.0
+    volumes:
+      - ./data/kuma_data:/app/data
+      - ./logs/kuma:/app/logs
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "${KUMA_HOST_URL}"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Nginx - Reverse Proxy (Optional)
+  nginx:
+    image: nginx:alpine
+    container_name: nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./config/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./config/nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./logs/nginx:/var/log/nginx
+      - ./certs:/etc/nginx/certs:ro
+    networks:
+      - app-network
+    depends_on:
+      - n8n
+      - grafana
+      - kuma
+    healthcheck:
+      test: ["CMD", "curl", "-f", "${NGINX_HOST_URL}/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+ # Prometheus - Metrics Collection (Optional)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus:/etc/prometheus:ro
+      - ./data/prometheus_data:/prometheus
+      - ./logs/prometheus:/var/log/prometheus
+    networks:
+      - app-network
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "${PROMOTHEUS_HOST}/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Node Exporter - System Metrics (Optional)
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node-exporter
+    restart: unless-stopped
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    networks:
+      - app-network
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "${NODEEXPORTER_HOST_URL}/metrics"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+  
+  # Redis Exporter
+  redis-exporter:
+    image: oliver006/redis_exporter
+    container_name: redis-exporter
+    ports:
+      - "9121:9121"
+    environment:
+      - REDIS_ADDR=redis://redis:6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    networks:
+      - app-network
+
+
+# Docker Networks
+networks:
+  app-network:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/16
+
+# Docker Volumes
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  grafana_data:
+    driver: local
+  kuma_data:
+    driver: local
+  ollama_data:
+    driver: local
+  prometheus_data:
+    driver: local
