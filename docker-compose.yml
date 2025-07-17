@@ -55,8 +55,8 @@ services:
       - OLLAMA_KEEP_ALIVE=24h
       - OLLAMA_MAX_LOADED_MODELS=3
     volumes:
-      - /mnt/c/Users/HP/.ollama:/root/.ollama
       - ./logs/ollama:/var/log/ollama
+      - ./data/ollama_data:/root/.ollama
     networks:
       - app-network
     healthcheck:
