@@ -1,0 +1,31 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # Prometheus monitoring dirinya sendiri
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Node Exporter - Monitoring sistem (CPU, RAM, Disk)
+  - job_name: 'node_exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+
+  # Redis Exporter - monitoring redis
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+
+  # n8n health endpoint (basic ping)
+  - job_name: 'n8n'
+    metrics_path: /healthz
+    static_configs:
+      - targets: ['n8n:5678']
+
+  # Ollama - hanya endpoint tags untuk cek
+  - job_name: 'ollama'
+    metrics_path: /api/tags
+    static_configs:
+      - targets: ['ollama:11434']
